@@ -9,11 +9,25 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createContextMiddleware } from "@ctxprotocol/sdk";
 
 import { fetchHNMentions } from "./sources/hn.js";
-import { fetchXMentions } from "./sources/x.js";
 import { normalizeMentions } from "./normalize.js";
 import { enrichMentions } from "./enrichment/index.js";
 import { generateBrief } from "./brief.js";
 import type { TimeWindow, SocialBrief } from "./types.js";
+
+// ─── Helper: build an error structuredContent that always matches outputSchema ─
+
+function errorBrief(q: string, win: string, message: string): Record<string, unknown> {
+  return {
+    query: q || "unknown",
+    window: win || "7d",
+    summary: `Error: ${message}`,
+    overall_sentiment: "neutral",
+    themes: [],
+    top_mentions: [],
+    recommended_action: "Retry the query. If the issue persists, check the server logs.",
+    fetched_at: new Date().toISOString(),
+  };
+}
 
 // ─── Tool definition (raw JSON Schema, CTX-style) ─────────────
 
@@ -200,20 +214,10 @@ async function runPipeline(
   q: string,
   window: TimeWindow,
 ): Promise<SocialBrief> {
-  const [hnRaw, xRaw] = await Promise.all([
-    fetchHNMentions(q, window),
-    fetchXMentions(q, window),
-  ]);
-
-  const raw = [...hnRaw, ...xRaw].sort(
-    (a, b) =>
-      new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
-  );
-
+  const raw = await fetchHNMentions(q, window);
   const normalized = normalizeMentions(raw, q);
   const enriched = enrichMentions(normalized);
-  const brief = generateBrief(q, window, enriched);
-  return brief;
+  return generateBrief(q, window, enriched);
 }
 
 // ─── MCP Server (low-level API, CTX-style) ─────────────────────
@@ -224,18 +228,18 @@ export function createSignalBriefServer() {
     { capabilities: { tools: {} } },
   );
 
-  // List tools — return raw JSON Schema definitions
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOLS,
   }));
 
-  // Call tool — execute the pipeline and return structuredContent
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
+    // EVERY code path must return structuredContent matching outputSchema
     if (name !== "get_social_brief") {
       return {
         content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        structuredContent: errorBrief("", "7d", `Unknown tool: ${name}`),
         isError: true,
       };
     }
@@ -245,16 +249,14 @@ export function createSignalBriefServer() {
 
     if (!q) {
       return {
-        content: [
-          { type: "text", text: "Missing required parameter: q" },
-        ],
+        content: [{ type: "text", text: "Missing required parameter: q" }],
+        structuredContent: errorBrief("", window, "Missing required parameter: q"),
         isError: true,
       };
     }
 
     try {
       const brief = await runPipeline(q, window as TimeWindow);
-
       return {
         content: [
           {
@@ -268,17 +270,7 @@ export function createSignalBriefServer() {
       const message = err instanceof Error ? err.message : String(err);
       return {
         content: [{ type: "text", text: `Error: ${message}` }],
-        structuredContent: {
-          query: q,
-          window: window,
-          summary: `Error fetching mentions: ${message}`,
-          overall_sentiment: "neutral",
-          themes: [],
-          top_mentions: [],
-          recommended_action:
-            "Retry the query. If the issue persists, check the server logs.",
-          fetched_at: new Date().toISOString(),
-        },
+        structuredContent: errorBrief(q, window, message),
         isError: true,
       };
     }
@@ -398,6 +390,17 @@ app.all("/debug/brief", async (req, res) => {
     res.status(500).json({ error: message });
   }
 });
+
+// ─── Keep-alive (prevents Render free-tier cold starts) ────────
+
+const KEEP_ALIVE_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
+setInterval(() => {
+  const url = `http://localhost:${PORT}/health`;
+  fetch(url).catch(() => {
+    /* ignore errors — server might not be ready yet */
+  });
+}, KEEP_ALIVE_INTERVAL_MS);
 
 // ─── Start ─────────────────────────────────────────────────────
 
