@@ -151,6 +151,16 @@ export function createSignalBriefServer() {
         const message = err instanceof Error ? err.message : String(err);
         return {
           content: [{ type: "text" as const, text: `Error: ${message}` }],
+          structuredContent: {
+            query: q,
+            window: window,
+            summary: `Error fetching mentions: ${message}`,
+            overall_sentiment: "neutral",
+            themes: [],
+            top_mentions: [],
+            recommended_action: "Retry the query. If the issue persists, check the server logs.",
+            fetched_at: new Date().toISOString(),
+          } as unknown as Record<string, unknown>,
           isError: true,
         };
       }
