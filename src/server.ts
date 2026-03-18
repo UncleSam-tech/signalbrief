@@ -110,7 +110,7 @@ export function createSignalBriefServer() {
     "get_social_brief",
     {
       description:
-        "Get a social mention intelligence brief for any brand, competitor, or keyword. Aggregates mentions from Hacker News and X (Twitter), then returns sentiment analysis, theme clusters, urgency-ranked top mentions, and an actionable recommendation.",
+        "Get a social mention intelligence brief for any brand, competitor, or keyword. Scans Hacker News stories and comments, then returns sentiment analysis, theme clusters, urgency-ranked top mentions, and an actionable recommendation.",
       inputSchema: {
         q: z.string().describe("Brand, competitor, or keyword to search for"),
         window: z
