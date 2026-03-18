@@ -6,146 +6,68 @@ import { createContextMiddleware } from "@ctxprotocol/sdk";
 import { z } from "zod";
 
 import { fetchHNMentions } from "./sources/hn.js";
+import { fetchXMentions } from "./sources/x.js";
 import { normalizeMentions } from "./normalize.js";
 import { enrichMentions } from "./enrichment/index.js";
 import { generateBrief } from "./brief.js";
 import type { TimeWindow, SocialBrief } from "./types.js";
+// ─── Output schema (Zod for MCP registerTool) ─────────────────
 
-// ─── Output schema (JSON Schema for MCP) ──────────────────────
-
-const OUTPUT_SCHEMA = {
-  type: "object" as const,
-  description: "A structured social mention intelligence brief",
-  properties: {
-    query: {
-      type: "string",
-      description: "The brand, competitor, or keyword that was searched",
-    },
-    window: {
-      type: "string",
-      description: "Time window for the search (24h, 7d, or 30d)",
-    },
-    summary: {
-      type: "string",
-      description:
-        "Human-readable summary of what people are saying, including mention count, overall sentiment, and key themes",
-    },
-    overall_sentiment: {
-      type: "string",
-      enum: ["positive", "neutral", "negative"],
-      description:
-        "Engagement-weighted overall sentiment across all retrieved mentions",
-    },
-    themes: {
-      type: "array",
-      description:
-        "Theme clusters found in mentions, sorted by frequency descending",
-      items: {
-        type: "object",
-        properties: {
-          theme: {
-            type: "string",
-            enum: [
-              "pricing_complaints",
-              "support_issues",
-              "feature_requests",
-              "switching_intent",
-              "praise",
-              "general_discussion",
-            ],
-            description: "Theme category label",
-          },
-          mention_count: {
-            type: "number",
-            description: "Number of mentions in this theme",
-          },
-          percentage: {
-            type: "number",
-            description: "Percentage of total mentions in this theme (0-100)",
-          },
-        },
-        required: ["theme", "mention_count", "percentage"],
-      },
-    },
-    top_mentions: {
-      type: "array",
-      description:
-        "The most important mentions sorted by urgency score descending, up to 5",
-      items: {
-        type: "object",
-        properties: {
-          title: {
-            type: "string",
-            description: "Title of the story or parent story for comments",
-          },
-          body_snippet: {
-            type: "string",
-            description:
-              "First 280 characters of the mention body text, truncated with ellipsis if longer",
-          },
-          url: {
-            type: "string",
-            description: "URL to the original mention",
-          },
-          author: { type: "string", description: "Author username" },
-          published_at: {
-            type: "string",
-            description: "ISO 8601 publication timestamp",
-          },
-          sentiment: {
-            type: "string",
-            enum: ["positive", "neutral", "negative"],
-            description: "Sentiment of this specific mention",
-          },
-          theme: {
-            type: "string",
-            description: "Primary theme detected in this mention",
-          },
-          urgency: {
-            type: "number",
-            description:
-              "Urgency score from 0 (low) to 10 (high), combining sentiment, churn language, and engagement",
-          },
-          why_it_matters: {
-            type: "string",
-            description:
-              "One-line explanation of why this mention deserves attention",
-          },
-        },
-        required: [
-          "title",
-          "body_snippet",
-          "url",
-          "author",
-          "published_at",
-          "sentiment",
-          "theme",
-          "urgency",
-          "why_it_matters",
-        ],
-      },
-    },
-    recommended_action: {
-      type: "string",
-      description:
-        "Actionable recommendation based on dominant themes and overall sentiment",
-    },
-    fetched_at: {
-      type: "string",
-      description: "ISO 8601 timestamp of when this brief was generated",
-    },
-  },
-  required: [
-    "query",
-    "window",
-    "summary",
-    "overall_sentiment",
-    "themes",
-    "top_mentions",
-    "recommended_action",
-    "fetched_at",
-  ],
-};
+const OUTPUT_SCHEMA = z.object({
+  query: z.string().describe("The brand, competitor, or keyword that was searched"),
+  window: z.string().describe("Time window for the search (24h, 7d, or 30d)"),
+  summary: z.string().describe(
+    "Human-readable summary of what people are saying, including mention count, overall sentiment, and key themes",
+  ),
+  overall_sentiment: z
+    .enum(["positive", "neutral", "negative"])
+    .describe("Engagement-weighted overall sentiment across all retrieved mentions"),
+  themes: z
+    .array(
+      z.object({
+        theme: z
+          .enum([
+            "pricing_complaints",
+            "support_issues",
+            "feature_requests",
+            "switching_intent",
+            "praise",
+            "general_discussion",
+          ])
+          .describe("Theme category label"),
+        mention_count: z.number().describe("Number of mentions in this theme"),
+        percentage: z.number().describe("Percentage of total mentions in this theme (0-100)"),
+      }),
+    )
+    .describe("Theme clusters found in mentions, sorted by frequency descending"),
+  top_mentions: z
+    .array(
+      z.object({
+        title: z.string().describe("Title of the story or parent story for comments"),
+        body_snippet: z.string().describe(
+          "First 280 characters of the mention body text, truncated with ellipsis if longer",
+        ),
+        url: z.string().describe("URL to the original mention"),
+        author: z.string().describe("Author username"),
+        published_at: z.string().describe("ISO 8601 publication timestamp"),
+        sentiment: z
+          .enum(["positive", "neutral", "negative"])
+          .describe("Sentiment of this specific mention"),
+        theme: z.string().describe("Primary theme detected in this mention"),
+        urgency: z.number().describe(
+          "Urgency score from 0 (low) to 10 (high), combining sentiment, churn language, and engagement",
+        ),
+        why_it_matters: z.string().describe(
+          "One-line explanation of why this mention deserves attention",
+        ),
+      }),
+    )
+    .describe("The most important mentions sorted by urgency score descending, up to 5"),
+  recommended_action: z.string().describe(
+    "Actionable recommendation based on dominant themes and overall sentiment",
+  ),
+  fetched_at: z.string().describe("ISO 8601 timestamp of when this brief was generated"),
+}).describe("A structured social mention intelligence brief");
 
 // ─── Pipeline ──────────────────────────────────────────────────
 
@@ -153,7 +75,16 @@ async function runPipeline(
   q: string,
   window: TimeWindow,
 ): Promise<SocialBrief> {
-  const raw = await fetchHNMentions(q, window);
+  const [hnRaw, xRaw] = await Promise.all([
+    fetchHNMentions(q, window),
+    fetchXMentions(q, window)
+  ]);
+  
+  // Combine all raw mentions, sorting them by date descending overall
+  const raw = [...hnRaw, ...xRaw].sort(
+    (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+  );
+
   const normalized = normalizeMentions(raw, q);
   const enriched = enrichMentions(normalized);
   const brief = generateBrief(q, window, enriched);
@@ -175,15 +106,33 @@ export function createSignalBriefServer() {
     },
   );
 
-  mcpServer.tool(
+  mcpServer.registerTool(
     "get_social_brief",
-    "Get a social mention intelligence brief for any brand, competitor, or keyword. Returns sentiment analysis, theme clusters, urgency-ranked top mentions, and an actionable recommendation based on public discussion from Hacker News.",
     {
-      q: z.string().describe("Brand, competitor, or keyword to search for"),
-      window: z
-        .enum(["24h", "7d", "30d"])
-        .default("7d")
-        .describe("Time window: 24h (last day), 7d (last week), or 30d (last month)"),
+      description:
+        "Get a social mention intelligence brief for any brand, competitor, or keyword. Aggregates mentions from Hacker News and X (Twitter), then returns sentiment analysis, theme clusters, urgency-ranked top mentions, and an actionable recommendation.",
+      inputSchema: {
+        q: z.string().describe("Brand, competitor, or keyword to search for"),
+        window: z
+          .enum(["24h", "7d", "30d"])
+          .default("7d")
+          .describe("Time window: 24h (last day), 7d (last week), or 30d (last month)"),
+      },
+      outputSchema: OUTPUT_SCHEMA,
+      _meta: {
+        surface: "both",
+        queryEligible: true,
+        latencyClass: "slow",
+        rateLimit: {
+          maxRequestsPerMinute: 10,
+          cooldownMs: 6000,
+          maxConcurrency: 2,
+          notes: "Rate limited by upstream X API (Basic tier) and HN Algolia API.",
+        },
+        pricing: {
+          executeUsd: "0.00",
+        },
+      },
     },
     async ({ q, window }) => {
       try {
