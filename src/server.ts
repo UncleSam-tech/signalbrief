@@ -1,9 +1,12 @@
 import express from "express";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { createContextMiddleware } from "@ctxprotocol/sdk";
-import { z } from "zod";
 
 import { fetchHNMentions } from "./sources/hn.js";
 import { fetchXMentions } from "./sources/x.js";
@@ -11,63 +14,185 @@ import { normalizeMentions } from "./normalize.js";
 import { enrichMentions } from "./enrichment/index.js";
 import { generateBrief } from "./brief.js";
 import type { TimeWindow, SocialBrief } from "./types.js";
-// ─── Output schema (Zod for MCP registerTool) ─────────────────
 
-const OUTPUT_SCHEMA = z.object({
-  query: z.string().describe("The brand, competitor, or keyword that was searched"),
-  window: z.string().describe("Time window for the search (24h, 7d, or 30d)"),
-  summary: z.string().describe(
-    "Human-readable summary of what people are saying, including mention count, overall sentiment, and key themes",
-  ),
-  overall_sentiment: z
-    .enum(["positive", "neutral", "negative"])
-    .describe("Engagement-weighted overall sentiment across all retrieved mentions"),
-  themes: z
-    .array(
-      z.object({
-        theme: z
-          .enum([
-            "pricing_complaints",
-            "support_issues",
-            "feature_requests",
-            "switching_intent",
-            "praise",
-            "general_discussion",
-          ])
-          .describe("Theme category label"),
-        mention_count: z.number().describe("Number of mentions in this theme"),
-        percentage: z.number().describe("Percentage of total mentions in this theme (0-100)"),
-      }),
-    )
-    .describe("Theme clusters found in mentions, sorted by frequency descending"),
-  top_mentions: z
-    .array(
-      z.object({
-        title: z.string().describe("Title of the story or parent story for comments"),
-        body_snippet: z.string().describe(
-          "First 280 characters of the mention body text, truncated with ellipsis if longer",
-        ),
-        url: z.string().describe("URL to the original mention"),
-        author: z.string().describe("Author username"),
-        published_at: z.string().describe("ISO 8601 publication timestamp"),
-        sentiment: z
-          .enum(["positive", "neutral", "negative"])
-          .describe("Sentiment of this specific mention"),
-        theme: z.string().describe("Primary theme detected in this mention"),
-        urgency: z.number().describe(
-          "Urgency score from 0 (low) to 10 (high), combining sentiment, churn language, and engagement",
-        ),
-        why_it_matters: z.string().describe(
-          "One-line explanation of why this mention deserves attention",
-        ),
-      }),
-    )
-    .describe("The most important mentions sorted by urgency score descending, up to 5"),
-  recommended_action: z.string().describe(
-    "Actionable recommendation based on dominant themes and overall sentiment",
-  ),
-  fetched_at: z.string().describe("ISO 8601 timestamp of when this brief was generated"),
-}).describe("A structured social mention intelligence brief");
+// ─── Tool definition (raw JSON Schema, CTX-style) ─────────────
+
+const TOOLS = [
+  {
+    name: "get_social_brief",
+    description:
+      "Get a social mention intelligence brief for any brand, competitor, or keyword. Scans Hacker News stories and comments, then returns sentiment analysis, theme clusters, urgency-ranked top mentions, and an actionable recommendation.",
+    _meta: {
+      surface: "both",
+      queryEligible: true,
+      latencyClass: "slow",
+      rateLimit: {
+        maxRequestsPerMinute: 10,
+        cooldownMs: 6000,
+        maxConcurrency: 2,
+        notes: "Rate limited by HN Algolia API.",
+      },
+      pricing: {
+        executeUsd: "0.00",
+      },
+    },
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        q: {
+          type: "string",
+          description: "Brand, competitor, or keyword to search for",
+        },
+        window: {
+          type: "string",
+          enum: ["24h", "7d", "30d"],
+          default: "7d",
+          description:
+            "Time window: 24h (last day), 7d (last week), or 30d (last month)",
+        },
+      },
+      required: ["q"],
+    },
+    outputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "The brand, competitor, or keyword that was searched",
+        },
+        window: {
+          type: "string",
+          description: "Time window for the search (24h, 7d, or 30d)",
+        },
+        summary: {
+          type: "string",
+          description:
+            "Human-readable summary of what people are saying, including mention count, overall sentiment, and key themes",
+        },
+        overall_sentiment: {
+          type: "string",
+          enum: ["positive", "neutral", "negative"],
+          description:
+            "Engagement-weighted overall sentiment across all retrieved mentions",
+        },
+        themes: {
+          type: "array",
+          description:
+            "Theme clusters found in mentions, sorted by frequency descending",
+          items: {
+            type: "object",
+            properties: {
+              theme: {
+                type: "string",
+                enum: [
+                  "pricing_complaints",
+                  "support_issues",
+                  "feature_requests",
+                  "switching_intent",
+                  "praise",
+                  "general_discussion",
+                ],
+                description: "Theme category label",
+              },
+              mention_count: {
+                type: "number",
+                description: "Number of mentions in this theme",
+              },
+              percentage: {
+                type: "number",
+                description:
+                  "Percentage of total mentions in this theme (0-100)",
+              },
+            },
+            required: ["theme", "mention_count", "percentage"],
+          },
+        },
+        top_mentions: {
+          type: "array",
+          description:
+            "The most important mentions sorted by urgency score descending, up to 5",
+          items: {
+            type: "object",
+            properties: {
+              title: {
+                type: "string",
+                description:
+                  "Title of the story or parent story for comments",
+              },
+              body_snippet: {
+                type: "string",
+                description:
+                  "First 280 characters of the mention body text, truncated with ellipsis if longer",
+              },
+              url: {
+                type: "string",
+                description: "URL to the original mention",
+              },
+              author: {
+                type: "string",
+                description: "Author username",
+              },
+              published_at: {
+                type: "string",
+                description: "ISO 8601 publication timestamp",
+              },
+              sentiment: {
+                type: "string",
+                enum: ["positive", "neutral", "negative"],
+                description: "Sentiment of this specific mention",
+              },
+              theme: {
+                type: "string",
+                description: "Primary theme detected in this mention",
+              },
+              urgency: {
+                type: "number",
+                description:
+                  "Urgency score from 0 (low) to 10 (high), combining sentiment, churn language, and engagement",
+              },
+              why_it_matters: {
+                type: "string",
+                description:
+                  "One-line explanation of why this mention deserves attention",
+              },
+            },
+            required: [
+              "title",
+              "body_snippet",
+              "url",
+              "author",
+              "published_at",
+              "sentiment",
+              "theme",
+              "urgency",
+              "why_it_matters",
+            ],
+          },
+        },
+        recommended_action: {
+          type: "string",
+          description:
+            "Actionable recommendation based on dominant themes and overall sentiment",
+        },
+        fetched_at: {
+          type: "string",
+          description:
+            "ISO 8601 timestamp of when this brief was generated",
+        },
+      },
+      required: [
+        "query",
+        "window",
+        "summary",
+        "overall_sentiment",
+        "themes",
+        "top_mentions",
+        "recommended_action",
+        "fetched_at",
+      ],
+    },
+  },
+];
 
 // ─── Pipeline ──────────────────────────────────────────────────
 
@@ -77,12 +202,12 @@ async function runPipeline(
 ): Promise<SocialBrief> {
   const [hnRaw, xRaw] = await Promise.all([
     fetchHNMentions(q, window),
-    fetchXMentions(q, window)
+    fetchXMentions(q, window),
   ]);
-  
-  // Combine all raw mentions, sorting them by date descending overall
+
   const raw = [...hnRaw, ...xRaw].sort(
-    (a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
+    (a, b) =>
+      new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
   );
 
   const normalized = normalizeMentions(raw, q);
@@ -91,83 +216,75 @@ async function runPipeline(
   return brief;
 }
 
-// ─── MCP Server ────────────────────────────────────────────────
+// ─── MCP Server (low-level API, CTX-style) ─────────────────────
 
 export function createSignalBriefServer() {
-  const mcpServer = new McpServer(
-    {
-      name: "signalbrief",
-      version: "1.0.0",
-    },
-    {
-      capabilities: {
-        tools: {},
-      },
-    },
+  const server = new Server(
+    { name: "signalbrief", version: "1.0.0" },
+    { capabilities: { tools: {} } },
   );
 
-  mcpServer.registerTool(
-    "get_social_brief",
-    {
-      description:
-        "Get a social mention intelligence brief for any brand, competitor, or keyword. Scans Hacker News stories and comments, then returns sentiment analysis, theme clusters, urgency-ranked top mentions, and an actionable recommendation.",
-      inputSchema: {
-        q: z.string().describe("Brand, competitor, or keyword to search for"),
-        window: z
-          .enum(["24h", "7d", "30d"])
-          .default("7d")
-          .describe("Time window: 24h (last day), 7d (last week), or 30d (last month)"),
-      },
-      outputSchema: OUTPUT_SCHEMA,
-      _meta: {
-        surface: "both",
-        queryEligible: true,
-        latencyClass: "slow",
-        rateLimit: {
-          maxRequestsPerMinute: 10,
-          cooldownMs: 6000,
-          maxConcurrency: 2,
-          notes: "Rate limited by upstream X API (Basic tier) and HN Algolia API.",
-        },
-        pricing: {
-          executeUsd: "0.00",
-        },
-      },
-    },
-    async ({ q, window }) => {
-      try {
-        const brief = await runPipeline(q, window as TimeWindow);
+  // List tools — return raw JSON Schema definitions
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: TOOLS,
+  }));
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `${brief.summary}\n\nRecommended action: ${brief.recommended_action}`,
-            },
-          ],
-          structuredContent: brief as unknown as Record<string, unknown>,
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return {
-          content: [{ type: "text" as const, text: `Error: ${message}` }],
-          structuredContent: {
-            query: q,
-            window: window,
-            summary: `Error fetching mentions: ${message}`,
-            overall_sentiment: "neutral",
-            themes: [],
-            top_mentions: [],
-            recommended_action: "Retry the query. If the issue persists, check the server logs.",
-            fetched_at: new Date().toISOString(),
-          } as unknown as Record<string, unknown>,
-          isError: true,
-        };
-      }
-    },
-  );
+  // Call tool — execute the pipeline and return structuredContent
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
 
-  return mcpServer;
+    if (name !== "get_social_brief") {
+      return {
+        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        isError: true,
+      };
+    }
+
+    const q = (args?.q as string) || "";
+    const window = (args?.window as string) || "7d";
+
+    if (!q) {
+      return {
+        content: [
+          { type: "text", text: "Missing required parameter: q" },
+        ],
+        isError: true,
+      };
+    }
+
+    try {
+      const brief = await runPipeline(q, window as TimeWindow);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${brief.summary}\n\nRecommended action: ${brief.recommended_action}`,
+          },
+        ],
+        structuredContent: brief as unknown as Record<string, unknown>,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        content: [{ type: "text", text: `Error: ${message}` }],
+        structuredContent: {
+          query: q,
+          window: window,
+          summary: `Error fetching mentions: ${message}`,
+          overall_sentiment: "neutral",
+          themes: [],
+          top_mentions: [],
+          recommended_action:
+            "Retry the query. If the issue persists, check the server logs.",
+          fetched_at: new Date().toISOString(),
+        },
+        isError: true,
+      };
+    }
+  });
+
+  return server;
 }
 
 // ─── Express app ───────────────────────────────────────────────
@@ -178,19 +295,16 @@ app.use(express.json());
 // Context Protocol security middleware on /mcp
 app.use("/mcp", createContextMiddleware());
 
-
-
 // Streamable HTTP transport for MCP
-// We need per-session transports for stateful MCP
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
 app.all("/mcp", async (req, res) => {
   try {
-    // For initialization requests, create a new transport
     const body = req.body;
     const isInitialize =
       body?.method === "initialize" ||
-      (Array.isArray(body) && body.some((m: { method?: string }) => m.method === "initialize"));
+      (Array.isArray(body) &&
+        body.some((m: { method?: string }) => m.method === "initialize"));
 
     if (isInitialize || req.method === "GET") {
       const transport = new StreamableHTTPServerTransport({
@@ -205,13 +319,12 @@ app.all("/mcp", async (req, res) => {
         if (sid) transports.delete(sid);
       };
 
-      const mcpServer = createSignalBriefServer();
-      await mcpServer.connect(transport);
+      const server = createSignalBriefServer();
+      await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
       return;
     }
 
-    // For subsequent requests, look up existing transport by session ID
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     if (sessionId && transports.has(sessionId)) {
       const transport = transports.get(sessionId)!;
@@ -219,10 +332,12 @@ app.all("/mcp", async (req, res) => {
       return;
     }
 
-    // No session found — tell client to re-initialize
     res.status(400).json({
       jsonrpc: "2.0",
-      error: { code: -32000, message: "No active session. Send initialize first." },
+      error: {
+        code: -32000,
+        message: "No active session. Send initialize first.",
+      },
       id: body?.id ?? null,
     });
   } catch (err) {
@@ -243,7 +358,7 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "signalbrief", version: "1.0.0" });
 });
 
-// ─── Debug route (bypasses MCP protocol for local testing) ─────
+// ─── Debug / info routes ───────────────────────────────────────
 
 app.get("/", (_req, res) => {
   res.send(`
