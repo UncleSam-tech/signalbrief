@@ -59,11 +59,35 @@ function aggregateThemes(mentions: EnrichedMention[]): ThemeSummary[] {
 
 function pickTopMentions(
   mentions: EnrichedMention[],
-  limit: number = 5,
+  limit: number = 10,
 ): TopMention[] {
-  const sorted = [...mentions].sort((a, b) => b.urgency - a.urgency);
+  // First, group by theme and pick the top 2 from each theme
+  const byTheme = new Map<string, EnrichedMention[]>();
+  for (const m of [...mentions].sort((a, b) => b.urgency - a.urgency)) {
+    if (!byTheme.has(m.theme)) byTheme.set(m.theme, []);
+    byTheme.get(m.theme)!.push(m);
+  }
 
-  return sorted.slice(0, limit).map((m) => ({
+  const selected = new Set<EnrichedMention>();
+  // 1. Ensure up to 2 top mentions from EVERY theme are included
+  for (const themeMentions of byTheme.values()) {
+    themeMentions.slice(0, 2).forEach((m) => selected.add(m));
+  }
+
+  // 2. Fill the rest of the limit with the most urgent remaining mentions
+  const remainingRemaining = [...mentions]
+    .sort((a, b) => b.urgency - a.urgency)
+    .filter((m) => !selected.has(m));
+
+  for (const m of remainingRemaining) {
+    if (selected.size >= limit) break;
+    selected.add(m);
+  }
+
+  // 3. Final sort by urgency for the output
+  const finalSorted = Array.from(selected).sort((a, b) => b.urgency - a.urgency);
+
+  return finalSorted.map((m) => ({
     title: m.title,
     body_snippet: m.body.length > 280 ? m.body.slice(0, 277) + "..." : m.body,
     url: m.url,
@@ -158,7 +182,7 @@ export function generateBrief(
   const summary = generateSummary(query, window, mentions, overallSentiment, themes);
   const recommendedAction = generateRecommendation(themes, overallSentiment);
 
-  return {
+  const brief: SocialBrief = {
     query,
     window,
     summary,
@@ -168,4 +192,12 @@ export function generateBrief(
     recommended_action: recommendedAction,
     fetched_at: new Date().toISOString(),
   };
+
+  // Signal absence explicitly to Context Protocol
+  if (mentions.length === 0) {
+    brief.searchExhausted = true;
+    brief.noResultsReason = "no_matching_data_found";
+  }
+
+  return brief;
 }

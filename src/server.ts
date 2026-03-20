@@ -184,6 +184,14 @@ const TOOLS = [
           type: "string",
           description: "ISO 8601 timestamp of brief generation",
         },
+        searchExhausted: {
+          type: "boolean",
+          description: "True if no matching data was found for the query, explicitly signaling absence to prevent AI retries",
+        },
+        noResultsReason: {
+          type: "string",
+          description: "Machine-readable reason for lack of results when searchExhausted is true",
+        },
       },
       required: [
         "query",

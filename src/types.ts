@@ -74,6 +74,8 @@ export interface SocialBrief {
   top_mentions: TopMention[];
   recommended_action: string;
   fetched_at: string;
+  searchExhausted?: boolean;
+  noResultsReason?: string;
 }
 
 // ─── Input types ───────────────────────────────────────────────
