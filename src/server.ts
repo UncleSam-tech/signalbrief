@@ -9,6 +9,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { createContextMiddleware } from "@ctxprotocol/sdk";
 
 import { fetchHNMentions } from "./sources/hn.js";
+import { fetchRedditMentions } from "./sources/reddit.js";
 import { normalizeMentions } from "./normalize.js";
 import { enrichMentions } from "./enrichment/index.js";
 import { generateBrief } from "./brief.js";
@@ -213,7 +214,17 @@ async function runPipeline(
   q: string,
   window: TimeWindow,
 ): Promise<SocialBrief> {
-  const raw = await fetchHNMentions(q, window);
+  const [hn, reddit] = await Promise.all([
+    fetchHNMentions(q, window).catch((err) => {
+      console.error("HN fetch failed:", err);
+      return [];
+    }),
+    fetchRedditMentions(q, window).catch((err) => {
+      console.error("Reddit fetch failed:", err);
+      return [];
+    }),
+  ]);
+  const raw = [...hn, ...reddit];
   const normalized = normalizeMentions(raw, q);
   const enriched = enrichMentions(normalized);
   return generateBrief(q, window, enriched);
