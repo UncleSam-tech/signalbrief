@@ -10,6 +10,7 @@ import { createContextMiddleware } from "@ctxprotocol/sdk";
 
 import { fetchHNMentions } from "./sources/hn.js";
 import { fetchRedditMentions } from "./sources/reddit.js";
+import { fetchGitHubMentions } from "./sources/github.js";
 import { normalizeMentions } from "./normalize.js";
 import { enrichMentions } from "./enrichment/index.js";
 import { generateBrief } from "./brief.js";
@@ -210,21 +211,35 @@ const TOOLS = [
 
 // ─── Pipeline ──────────────────────────────────────────────────
 
+const withTimeout = <T>(promise: Promise<T>, ms: number, fallback: T, label: string): Promise<T> => {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[${label}] Request timed out after ${ms}ms`);
+      resolve(fallback);
+    }, ms);
+    promise
+      .then((res) => {
+        clearTimeout(timer);
+        resolve(res);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        console.error(`[${label}] Fetch failed:`, err);
+        resolve(fallback);
+      });
+  });
+};
+
 async function runPipeline(
   q: string,
   window: TimeWindow,
 ): Promise<SocialBrief> {
-  const [hn, reddit] = await Promise.all([
-    fetchHNMentions(q, window).catch((err) => {
-      console.error("HN fetch failed:", err);
-      return [];
-    }),
-    fetchRedditMentions(q, window).catch((err) => {
-      console.error("Reddit fetch failed:", err);
-      return [];
-    }),
+  const [hn, reddit, github] = await Promise.all([
+    withTimeout(fetchHNMentions(q, window), 4000, [], "HackerNews"),
+    withTimeout(fetchRedditMentions(q, window), 4000, [], "Reddit"),
+    withTimeout(fetchGitHubMentions(q, window), 4000, [], "GitHub"),
   ]);
-  const raw = [...hn, ...reddit];
+  const raw = [...hn, ...reddit, ...github];
   const normalized = normalizeMentions(raw, q);
   const enriched = enrichMentions(normalized);
   return generateBrief(q, window, enriched);
