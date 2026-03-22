@@ -105,7 +105,11 @@ assert(typeof enriched[0].why_it_matters === "string" && enriched[0].why_it_matt
 
 console.log("\n📊 Brief Generation Tests");
 
-const brief: SocialBrief = generateBrief("Stripe", "7d", enriched);
+const brief: SocialBrief = generateBrief("Stripe", "7d", enriched, [
+  { source: "HackerNews", mention_count: 3 },
+  { source: "Reddit", mention_count: 0 },
+  { source: "GitHub", mention_count: 0 }
+]);
 assert(brief.query === "Stripe", "brief.query matches input");
 assert(brief.window === "7d", "brief.window matches input");
 assert(typeof brief.summary === "string" && brief.summary.length > 0, "summary is non-empty string");
@@ -148,7 +152,11 @@ assert(typeof brief.fetched_at === "string" && !isNaN(Date.parse(brief.fetched_a
 
 console.log("\n📊 Empty Brief Tests");
 
-const emptyBrief = generateBrief("UnknownBrand12345", "24h", []);
+const emptyBrief = generateBrief("UnknownBrand12345", "24h", [], [
+  { source: "HackerNews", mention_count: 0 },
+  { source: "Reddit", mention_count: 0 },
+  { source: "GitHub", mention_count: 0 }
+]);
 assert(emptyBrief.query === "UnknownBrand12345", "empty brief query matches");
 assert(emptyBrief.themes.length === 0, "empty brief has no themes");
 assert(emptyBrief.top_mentions.length === 0, "empty brief has no top_mentions");
@@ -162,6 +170,7 @@ const requiredKeys = [
   "query",
   "window",
   "summary",
+  "sources_searched",
   "overall_sentiment",
   "themes",
   "top_mentions",
