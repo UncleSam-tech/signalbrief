@@ -235,9 +235,9 @@ async function runPipeline(
   window: TimeWindow,
 ): Promise<SocialBrief> {
   const [hn, reddit, github] = await Promise.all([
-    withTimeout(fetchHNMentions(q, window), 4000, [], "HackerNews"),
-    withTimeout(fetchRedditMentions(q, window), 4000, [], "Reddit"),
-    withTimeout(fetchGitHubMentions(q, window), 4000, [], "GitHub"),
+    withTimeout(fetchHNMentions(q, window), 10000, [], "HackerNews"),
+    withTimeout(fetchRedditMentions(q, window), 10000, [], "Reddit"),
+    withTimeout(fetchGitHubMentions(q, window), 10000, [], "GitHub"),
   ]);
   const raw = [...hn, ...reddit, ...github];
   const normalized = normalizeMentions(raw, q);
