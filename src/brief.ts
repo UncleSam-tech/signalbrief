@@ -175,6 +175,7 @@ export function generateBrief(
   query: string,
   window: string,
   mentions: EnrichedMention[],
+  sourcesSearched: import("./types.js").SourceSummary[],
 ): SocialBrief {
   const overallSentiment = computeOverallSentiment(mentions);
   const themes = aggregateThemes(mentions);
@@ -186,6 +187,7 @@ export function generateBrief(
     query,
     window,
     summary,
+    sources_searched: sourcesSearched,
     overall_sentiment: overallSentiment,
     themes,
     top_mentions: topMentions,

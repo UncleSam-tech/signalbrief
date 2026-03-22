@@ -91,6 +91,24 @@ const TOOLS = [
           description:
             "Human-readable summary including mention count, sentiment, and key themes",
         },
+        sources_searched: {
+          type: "array",
+          description: "List of all platforms searched and the total mentions retrieved from each",
+          items: {
+            type: "object",
+            properties: {
+              source: {
+                type: "string",
+                description: "Name of the platform (e.g., HackerNews, Reddit, GitHub)",
+              },
+              mention_count: {
+                type: "number",
+                description: "Number of mentions found on this platform",
+              },
+            },
+            required: ["source", "mention_count"],
+          },
+        },
         overall_sentiment: {
           type: "string",
           enum: ["positive", "neutral", "negative"],
@@ -199,6 +217,7 @@ const TOOLS = [
         "query",
         "window",
         "summary",
+        "sources_searched",
         "overall_sentiment",
         "themes",
         "top_mentions",
@@ -239,10 +258,17 @@ async function runPipeline(
     withTimeout(fetchRedditMentions(q, window), 10000, [], "Reddit"),
     withTimeout(fetchGitHubMentions(q, window), 10000, [], "GitHub"),
   ]);
+  
+  const sources_searched = [
+    { source: "HackerNews", mention_count: hn.length },
+    { source: "Reddit", mention_count: reddit.length },
+    { source: "GitHub", mention_count: github.length },
+  ];
+
   const raw = [...hn, ...reddit, ...github];
   const normalized = normalizeMentions(raw, q);
   const enriched = enrichMentions(normalized);
-  return generateBrief(q, window, enriched);
+  return generateBrief(q, window, enriched, sources_searched);
 }
 
 // ─── MCP Server factory ────────────────────────────────────────

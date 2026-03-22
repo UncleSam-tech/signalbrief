@@ -65,10 +65,16 @@ export interface TopMention {
   why_it_matters: string;
 }
 
+export interface SourceSummary {
+  source: string;
+  mention_count: number;
+}
+
 export interface SocialBrief {
   query: string;
   window: string;
   summary: string;
+  sources_searched: SourceSummary[];
   overall_sentiment: SentimentLabel;
   themes: ThemeSummary[];
   top_mentions: TopMention[];
