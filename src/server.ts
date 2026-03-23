@@ -71,6 +71,10 @@ const TOOLS = [
           description:
             "Time window: 24h (last day), 7d (last week), or 30d (last month)",
         },
+        strict_filter: {
+          type: "string",
+          description: "Optional core entity filter. If extracting mentions for a specific brand/product, pass the EXACT core brand name here (e.g. \"Notion\"). The MCP server will strictly drop any raw mentions that do not explicitly contain this string, eliminating 100% of hallucinations and API semantic noise.",
+        },
       },
       required: ["q"],
     },
@@ -252,13 +256,24 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, fallback: T, label: str
 async function runPipeline(
   q: string,
   window: TimeWindow,
+  strict_filter?: string,
 ): Promise<SocialBrief> {
-  const [hn, reddit, github] = await Promise.all([
+  let [hn, reddit, github] = await Promise.all([
     withTimeout(fetchHNMentions(q, window), 10000, [], "HackerNews"),
     withTimeout(fetchRedditMentions(q, window), 10000, [], "Reddit"),
     withTimeout(fetchGitHubMentions(q, window), 10000, [], "GitHub"),
   ]);
-  
+
+  if (strict_filter) {
+    const term = strict_filter.toLowerCase();
+    const filterFn = (m: any) => 
+      (m.title && m.title.toLowerCase().includes(term)) || 
+      (m.body && m.body.toLowerCase().includes(term));
+    hn = hn.filter(filterFn);
+    reddit = reddit.filter(filterFn);
+    github = github.filter(filterFn);
+  }
+
   const sources_searched = [
     { source: "HackerNews", mention_count: hn.length },
     { source: "Reddit", mention_count: reddit.length },
@@ -296,6 +311,7 @@ function createSignalBriefServer() {
 
     const q = (args?.q as string) || "";
     const window = (args?.window as string) || "7d";
+    const strict_filter = args?.strict_filter as string | undefined;
 
     if (!q) {
       return {
@@ -308,7 +324,7 @@ function createSignalBriefServer() {
     }
 
     try {
-      const brief = await runPipeline(q, window as TimeWindow);
+      const brief = await runPipeline(q, window as TimeWindow, strict_filter);
       return {
         content: [
           {

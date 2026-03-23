@@ -25,15 +25,7 @@ export async function fetchGitHubMentions(
   window: TimeWindow,
 ): Promise<RawMention[]> {
   const dateStr = getIsoDate(window);
-  
-  // Force exact-match phrase parsing if the AI failed to quote the query. 
-  // This explicitly prevents multi-word explosions (e.g., "Notion software" pulling in every repo containing "software")
-  let safeQuery = query.trim();
-  if (!safeQuery.startsWith('"') && !safeQuery.endsWith('"')) {
-    safeQuery = `"${safeQuery}"`;
-  }
-  
-  const q = `${safeQuery} updated:>=${dateStr} is:issue`;
+  const q = `${query} updated:>=${dateStr} is:issue`;
   
   const searchParams = new URLSearchParams({
     q,
