@@ -350,7 +350,6 @@ function createSignalBriefServer() {
 // ─── Express app with SSE transport (CTX official pattern) ─────
 
 const app = express();
-app.use(express.json());
 
 // Context Protocol security middleware
 app.use("/sse", createContextMiddleware());
@@ -376,69 +375,26 @@ app.post("/messages", async (req, res) => {
   const sessionId = req.query.sessionId as string;
   const transport = transports.get(sessionId);
   if (transport) {
-    await transport.handlePostMessage(req, res, req.body);
+    await transport.handlePostMessage(req, res);
   } else {
     res.status(400).json({ error: "No active session" });
   }
 });
 
 // Also support Streamable HTTP on /mcp for compatibility
-app.all("/mcp", async (req, res) => {
+app.post("/mcp", async (req, res) => {
   try {
-    // Dynamic import to avoid issues if not available
-    const { StreamableHTTPServerTransport } = await import(
-      "@modelcontextprotocol/sdk/server/streamableHttp.js"
-    );
-
-    const body = req.body;
-    const isInitialize =
-      body?.method === "initialize" ||
-      (Array.isArray(body) &&
-        body.some((m: { method?: string }) => m.method === "initialize"));
-
-    if (isInitialize || req.method === "GET") {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        onsessioninitialized: (sessionId: string) => {
-          transports.set(sessionId, transport as any);
-        },
-      });
-
-      transport.onclose = () => {
-        const sid = (transport as unknown as { sessionId?: string })
-          .sessionId;
-        if (sid) transports.delete(sid);
-      };
-
-      const server = createSignalBriefServer();
-      await server.connect(transport);
-      await transport.handleRequest(req, res, body);
-      return;
-    }
-
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (sessionId && transports.has(sessionId)) {
-      const t = transports.get(sessionId)!;
-      if ("handleRequest" in t) {
-        await (t as any).handleRequest(req, res, body);
-      }
-      return;
-    }
-
-    res.status(400).json({
-      jsonrpc: "2.0",
-      error: {
-        code: -32000,
-        message: "No active session. Send initialize first.",
-      },
-      id: body?.id ?? null,
-    });
-  } catch (err) {
+    const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+    const mcpServer = createSignalBriefServer();
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    await mcpServer.connect(transport);
+    await transport.handleRequest(req, res);
+  } catch (err: any) {
     console.error("MCP handler error:", err);
     if (!res.headersSent) {
       res.status(500).json({
         jsonrpc: "2.0",
-        error: { code: -32603, message: "Internal server error" },
+        error: { code: -32603, message: err.message },
         id: null,
       });
     }
@@ -467,7 +423,7 @@ app.get("/", (_req, res) => {
   `);
 });
 
-app.all("/debug/brief", async (req, res) => {
+app.all("/debug/brief", express.json(), async (req, res) => {
   try {
     const q = (req.body?.q || req.query?.q) as string | undefined;
     const win = (req.body?.window || req.query?.window) as
