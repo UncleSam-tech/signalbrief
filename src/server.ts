@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   ListToolsRequestSchema,
@@ -382,14 +383,29 @@ app.post("/messages", async (req, res) => {
   }
 });
 
+// Map for Streamable HTTP statefulness
+const httpTransports = new Map<string, { transport: any, mcpServer: any }>();
+
 // Also support Streamable HTTP on /mcp for compatibility
 app.post("/mcp", async (req, res) => {
   try {
     const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
-    const mcpServer = createSignalBriefServer();
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req, res);
+    
+    const reqSessionId = req.headers["mcp-session-id"] as string;
+    let sessionId = reqSessionId;
+    let session = sessionId ? httpTransports.get(sessionId) : undefined;
+
+    if (!session) {
+      sessionId = reqSessionId || crypto.randomUUID();
+      const mcpServer = createSignalBriefServer();
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => sessionId as string });
+      await mcpServer.connect(transport);
+      session = { transport, mcpServer };
+      httpTransports.set(sessionId, session);
+    }
+
+    res.setHeader("mcp-session-id", sessionId);
+    await session.transport.handleRequest(req, res);
   } catch (err: any) {
     console.error("MCP handler error:", err);
     if (!res.headersSent) {
