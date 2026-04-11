@@ -27,6 +27,7 @@ function errorBrief(
     query: q || "unknown",
     window: win || "7d",
     summary: `Error: ${message}`,
+    sources_searched: [],
     overall_sentiment: "neutral",
     themes: [],
     top_mentions: [],
@@ -54,7 +55,7 @@ const TOOLS = [
         notes: "Rate limited by HN Algolia API.",
       },
       pricing: {
-        executeUsd: "0.00",
+        executeUsd: "0.01",
       },
     },
     inputSchema: {
